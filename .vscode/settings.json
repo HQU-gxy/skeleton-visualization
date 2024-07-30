@@ -1,3 +1,10 @@
 {
-    "python.analysis.typeCheckingMode": "basic"
+    "python.analysis.typeCheckingMode": "basic",
+    "cSpell.words": [
+        "jaxtyped",
+        "jaxtyping",
+        "ndarray",
+        "typechecked",
+        "typechecker"
+    ]
 }
