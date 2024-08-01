@@ -1,0 +1,3 @@
+[submodule "bvhio"]
+	path = bvhio
+	url = https://github.com/crosstyan/bvhio
