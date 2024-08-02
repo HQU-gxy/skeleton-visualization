@@ -1,3 +1,6 @@
 [submodule "bvhio"]
 	path = bvhio
 	url = https://github.com/crosstyan/bvhio
+[submodule "spatial-transform"]
+	path = spatial-transform
+	url = https://github.com/crosstyan/spatial-transform
