@@ -3,35 +3,39 @@ import re
 from transforms3d.euler import euler2mat, mat2euler
 from typing import Optional
 
+
 class BvhChannel:
-    _index:int = 0
-    _name:str = ""
-    def __init__(self, index:int, name:str):
+    _index: int = 0
+    _name: str = ""
+
+    def __init__(self, index: int, name: str):
         self._index = index
         self._name = name
-    
+
     @property
     def index(self):
         return self._index
-    
+
     @property
     def name(self):
         return self._name
-    
+
     @property
     def is_position(self):
         return self._name.endswith("position")
-    
+
     @property
     def is_rotation(self):
         return self._name.endswith("rotation")
 
+
 class BvhJoint:
-    name:str = ""
+    name: str = ""
     parent: Optional["BvhJoint"] = None
     offset: np.ndarray = np.zeros(3)
     channels: list[BvhChannel] = []
     children: list["BvhJoint"] = []
+
     def __init__(self, name: str, parent: Optional["BvhJoint"]):
         self.name = name
         self.parent = parent
@@ -58,13 +62,14 @@ class Bvh:
     _keyframes: Optional[np.ndarray] = None
     frames: int = 0
     fps: int = 0
+
     def __init__(self):
         self.joints = {}
         self.root = None
         self._keyframes = None
         self.frames = 0
         self.fps = 0
-    
+
     @property
     def keyframes(self):
         if self._keyframes is None:
@@ -72,12 +77,12 @@ class Bvh:
         return self._keyframes
 
     def _parse_hierarchy(self, text):
-        lines = re.split('\\s*\\n+\\s*', text)
+        lines = re.split("\\s*\\n+\\s*", text)
 
         joint_stack = []
 
         for line in lines:
-            words = re.split('\\s+', line)
+            words = re.split("\\s+", line)
             instruction = words[0]
 
             if instruction == "JOINT" or instruction == "ROOT":
@@ -100,7 +105,7 @@ class Bvh:
                 joint_stack[-1].add_child(joint)
                 joint_stack.append(joint)
                 self.joints[joint.name] = joint
-            elif instruction == '}':
+            elif instruction == "}":
                 joint_stack.pop()
 
     def _add_pose_recursive(self, joint, offset, poses):
@@ -113,12 +118,13 @@ class Bvh:
     def plot_hierarchy(self):
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d import axes3d, Axes3D
+
         poses = []
         self._add_pose_recursive(self.root, np.zeros(3), poses)
         pos = np.array(poses)
 
         fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
+        ax = fig.add_subplot(111, projection="3d")
         ax.scatter(pos[:, 0], pos[:, 2], pos[:, 1])
         ax.set_xlim(-30, 30)
         ax.set_ylim(-30, 30)
@@ -126,13 +132,13 @@ class Bvh:
         plt.show()
 
     def parse_motion(self, text):
-        lines = re.split('\\s*\\n+\\s*', text)
+        lines = re.split("\\s*\\n+\\s*", text)
 
         frame = 0
         for line in lines:
-            if line == '':
+            if line == "":
                 continue
-            words = re.split('\\s+', line)
+            words = re.split("\\s+", line)
 
             if line.startswith("Frame Time:"):
                 self.fps = round(1 / float(words[2]))
@@ -145,7 +151,7 @@ class Bvh:
                 self._keyframes = np.empty((self.frames, len(words)), dtype=np.float32)
 
             for angle_index in range(len(words)):
-                if words[angle_index] == '':
+                if words[angle_index] == "":
                     continue
                 self.keyframes[frame, angle_index] = float(words[angle_index])
 
@@ -178,11 +184,11 @@ class Bvh:
                 continue
 
             if channel == "Xrotation":
-                euler_rot = np.array([local_rotation[0], 0., 0.])
+                euler_rot = np.array([local_rotation[0], 0.0, 0.0])
             elif channel == "Yrotation":
-                euler_rot = np.array([0., local_rotation[1], 0.])
+                euler_rot = np.array([0.0, local_rotation[1], 0.0])
             elif channel == "Zrotation":
-                euler_rot = np.array([0., 0., local_rotation[2]])
+                euler_rot = np.array([0.0, 0.0, local_rotation[2]])
             else:
                 raise Exception(f"Unknown channel {channel}")
 
@@ -208,9 +214,13 @@ class Bvh:
 
         return offset_position, index_offset
 
-    def _recursive_apply_frame(self, joint, frame_pose, index_offset, p, r, M_parent, p_parent):
+    def _recursive_apply_frame(
+        self, joint, frame_pose, index_offset, p, r, M_parent, p_parent
+    ):
         if joint.position_animated():
-            offset_position, index_offset = self._extract_position(joint, frame_pose, index_offset)
+            offset_position, index_offset = self._extract_position(
+                joint, frame_pose, index_offset
+            )
         else:
             offset_position = np.zeros(3)
 
@@ -221,7 +231,9 @@ class Bvh:
             return index_offset
 
         if joint.rotation_animated():
-            M_rotation, index_offset = self._extract_rotation(frame_pose, index_offset, joint)
+            M_rotation, index_offset = self._extract_rotation(
+                frame_pose, index_offset, joint
+            )
         else:
             M_rotation = np.eye(3)
 
@@ -234,7 +246,9 @@ class Bvh:
         r[joint_index] = rotation
 
         for c in joint.children:
-            index_offset = self._recursive_apply_frame(c, frame_pose, index_offset, p, r, M, position)
+            index_offset = self._recursive_apply_frame(
+                c, frame_pose, index_offset, p, r, M, position
+            )
 
         return index_offset
 
@@ -246,7 +260,9 @@ class Bvh:
         M_parent[0, 0] = 1
         M_parent[1, 1] = 1
         M_parent[2, 2] = 1
-        self._recursive_apply_frame(self.root, frame_pose, 0, p, r, M_parent, np.zeros(3))
+        self._recursive_apply_frame(
+            self.root, frame_pose, 0, p, r, M_parent, np.zeros(3)
+        )
 
         return p, r
 
@@ -262,10 +278,11 @@ class Bvh:
     def _plot_pose(self, p, r, fig=None, ax=None):
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d import axes3d, Axes3D
+
         if fig is None:
             fig = plt.figure()
         if ax is None:
-            ax = fig.add_subplot(111, projection='3d')
+            ax = fig.add_subplot(111, projection="3d")
 
         ax.cla()
         ax.scatter(p[:, 0], p[:, 2], p[:, 1])
@@ -284,14 +301,15 @@ class Bvh:
         return self.joints.keys()
 
     def parse_file(self, path):
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             self.parse_string(f.read())
 
     def plot_all_frames(self):
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d import axes3d, Axes3D
+
         fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
+        ax = fig.add_subplot(111, projection="3d")
         for i in range(self.frames):
             self.plot_frame(i, fig, ax)
 
@@ -299,7 +317,7 @@ class Bvh:
         return f"BVH {len(self.joints.keys())} joints, {self.frames} frames"
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # create Bvh parser
     anim = Bvh()
     # parser file
