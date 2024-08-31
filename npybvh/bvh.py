@@ -1,10 +1,38 @@
 import numpy as np
 import re
 from transforms3d.euler import euler2mat, mat2euler
+from typing import Optional
 
+class BvhChannel:
+    _index:int = 0
+    _name:str = ""
+    def __init__(self, index:int, name:str):
+        self._index = index
+        self._name = name
+    
+    @property
+    def index(self):
+        return self._index
+    
+    @property
+    def name(self):
+        return self._name
+    
+    @property
+    def is_position(self):
+        return self._name.endswith("position")
+    
+    @property
+    def is_rotation(self):
+        return self._name.endswith("rotation")
 
 class BvhJoint:
-    def __init__(self, name, parent):
+    name:str = ""
+    parent: Optional["BvhJoint"] = None
+    offset: np.ndarray = np.zeros(3)
+    channels: list[BvhChannel] = []
+    children: list["BvhJoint"] = []
+    def __init__(self, name: str, parent: Optional["BvhJoint"]):
         self.name = name
         self.parent = parent
         self.offset = np.zeros(3)
@@ -18,19 +46,30 @@ class BvhJoint:
         return self.name
 
     def position_animated(self):
-        return any([x.endswith('position') for x in self.channels])
+        return any([x.is_position for x in self.channels])
 
     def rotation_animated(self):
-        return any([x.endswith('rotation') for x in self.channels])
+        return any([x.is_rotation for x in self.channels])
 
 
 class Bvh:
+    joints: dict[str, BvhJoint] = {}
+    root: Optional[BvhJoint] = None
+    _keyframes: Optional[np.ndarray] = None
+    frames: int = 0
+    fps: int = 0
     def __init__(self):
         self.joints = {}
         self.root = None
-        self.keyframes = None
+        self._keyframes = None
         self.frames = 0
         self.fps = 0
+    
+    @property
+    def keyframes(self):
+        if self._keyframes is None:
+            raise ValueError("No keyframes loaded")
+        return self._keyframes
 
     def _parse_hierarchy(self, text):
         lines = re.split('\\s*\\n+\\s*', text)
@@ -102,8 +141,8 @@ class Bvh:
                 self.frames = int(words[1])
                 continue
 
-            if self.keyframes is None:
-                self.keyframes = np.empty((self.frames, len(words)), dtype=np.float32)
+            if self._keyframes is None:
+                self._keyframes = np.empty((self.frames, len(words)), dtype=np.float32)
 
             for angle_index in range(len(words)):
                 if words[angle_index] == '':
