@@ -2,15 +2,18 @@ import numpy as np
 import re
 from transforms3d.euler import euler2mat, mat2euler
 from typing import Optional
+from os import PathLike
 
 
 class BvhChannel:
     _index: int = 0
     _name: str = ""
+    _joint: "BvhJoint"
 
-    def __init__(self, index: int, name: str):
+    def __init__(self, index: int, name: str, joint: "BvhJoint"):
         self._index = index
         self._name = name
+        self._joint = joint
 
     @property
     def index(self):
@@ -19,6 +22,13 @@ class BvhChannel:
     @property
     def name(self):
         return self._name
+
+    @property
+    def joint(self):
+        return self._joint
+
+    def __repr__(self) -> str:
+        return f"{self._name}/{self.index}@{self.joint.name}"
 
     @property
     def is_position(self):
@@ -79,8 +89,9 @@ class Bvh:
     def _parse_hierarchy(self, text):
         lines = re.split("\\s*\\n+\\s*", text)
 
-        joint_stack = []
+        joint_stack: list[BvhJoint] = []
 
+        channel_count = 0
         for line in lines:
             words = re.split("\\s+", line)
             instruction = words[0]
@@ -96,7 +107,11 @@ class Bvh:
                     self.root = joint
             elif instruction == "CHANNELS":
                 for i in range(2, len(words)):
-                    joint_stack[-1].channels.append(words[i])
+                    name = words[i]
+                    joint_stack[-1].channels.append(
+                        BvhChannel(channel_count, name, joint_stack[-1])
+                    )
+                    channel_count += 1
             elif instruction == "OFFSET":
                 for i in range(1, len(words)):
                     joint_stack[-1].offset[i - 1] = float(words[i])
@@ -108,30 +123,37 @@ class Bvh:
             elif instruction == "}":
                 joint_stack.pop()
 
-    def _add_pose_recursive(self, joint, offset, poses):
+    def _add_pose_recursive(self, joint: BvhJoint, offset, poses):
         pose = joint.offset + offset
         poses.append(pose)
 
         for c in joint.children:
             self._add_pose_recursive(c, pose, poses)
 
-    def plot_hierarchy(self):
+    def plot_hierarchy(self, fig=None):
+        """
+        draw the skeleton in T-pose
+        """
         import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import axes3d, Axes3D
 
         poses = []
+        assert self.root is not None
         self._add_pose_recursive(self.root, np.zeros(3), poses)
         pos = np.array(poses)
 
-        fig = plt.figure()
+        if fig is None:
+            fig = plt.figure()
+        assert type(fig) == type(
+            plt.figure()
+        ), f"Expected matplotlib figure, got {type(fig)}"
         ax = fig.add_subplot(111, projection="3d")
         ax.scatter(pos[:, 0], pos[:, 2], pos[:, 1])
         ax.set_xlim(-30, 30)
         ax.set_ylim(-30, 30)
-        ax.set_zlim(-30, 30)
-        plt.show()
+        ax.set_zlim(-30, 30)  # type: ignore
+        return fig
 
-    def parse_motion(self, text):
+    def parse_motion(self, text: str):
         lines = re.split("\\s*\\n+\\s*", text)
 
         frame = 0
@@ -157,65 +179,65 @@ class Bvh:
 
             frame += 1
 
-    def parse_string(self, text):
+    def parse_string(self, text: str):
         hierarchy, motion = text.split("MOTION")
         self._parse_hierarchy(hierarchy)
         self.parse_motion(motion)
 
-    def _extract_rotation(self, frame_pose, index_offset, joint):
+    def _extract_rotation(self, frame_pose, index_offset: int, joint: BvhJoint):
         local_rotation = np.zeros(3)
         for channel in joint.channels:
-            if channel.endswith("position"):
+            if channel.is_position:
                 continue
-            if channel == "Xrotation":
+            if channel.name == "Xrotation":
                 local_rotation[0] = frame_pose[index_offset]
-            elif channel == "Yrotation":
+            elif channel.name == "Yrotation":
                 local_rotation[1] = frame_pose[index_offset]
-            elif channel == "Zrotation":
+            elif channel.name == "Zrotation":
                 local_rotation[2] = frame_pose[index_offset]
             else:
-                raise Exception(f"Unknown channel {channel}")
+                raise ValueError(f"Unknown channel {channel}")
             index_offset += 1
 
         local_rotation = np.deg2rad(local_rotation)
         M_rotation = np.eye(3)
         for channel in joint.channels:
-            if channel.endswith("position"):
+            if channel.is_position:
                 continue
 
-            if channel == "Xrotation":
+            if channel.name == "Xrotation":
                 euler_rot = np.array([local_rotation[0], 0.0, 0.0])
-            elif channel == "Yrotation":
+            elif channel.name == "Yrotation":
                 euler_rot = np.array([0.0, local_rotation[1], 0.0])
-            elif channel == "Zrotation":
+            elif channel.name == "Zrotation":
                 euler_rot = np.array([0.0, 0.0, local_rotation[2]])
             else:
-                raise Exception(f"Unknown channel {channel}")
+                raise ValueError(f"Unknown channel {channel}")
 
             M_channel = euler2mat(*euler_rot)
             M_rotation = M_rotation.dot(M_channel)
 
         return M_rotation, index_offset
 
-    def _extract_position(self, joint, frame_pose, index_offset):
+    def _extract_position(self, joint: BvhJoint, frame_pose, index_offset):
         offset_position = np.zeros(3)
         for channel in joint.channels:
-            if channel.endswith("rotation"):
+            if channel.is_rotation:
                 continue
-            if channel == "Xposition":
+            if channel.name == "Xposition":
                 offset_position[0] = frame_pose[index_offset]
-            elif channel == "Yposition":
+            elif channel.name == "Yposition":
                 offset_position[1] = frame_pose[index_offset]
-            elif channel == "Zposition":
+            elif channel.name == "Zposition":
                 offset_position[2] = frame_pose[index_offset]
             else:
-                raise Exception(f"Unknown channel {channel}")
+                raise ValueError(f"Unknown channel {channel}")
             index_offset += 1
 
         return offset_position, index_offset
 
     def _recursive_apply_frame(
-        self, joint, frame_pose, index_offset, p, r, M_parent, p_parent
+        self, joint: BvhJoint, frame_pose, index_offset, p, r, M_parent, p_parent
     ):
         if joint.position_animated():
             offset_position, index_offset = self._extract_position(
@@ -252,7 +274,7 @@ class Bvh:
 
         return index_offset
 
-    def frame_pose(self, frame):
+    def frame_pose(self, frame: int):
         p = np.empty((len(self.joints), 3))
         r = np.empty((len(self.joints), 3))
         frame_pose = self.keyframes[frame]
@@ -260,12 +282,14 @@ class Bvh:
         M_parent[0, 0] = 1
         M_parent[1, 1] = 1
         M_parent[2, 2] = 1
+        assert self.root is not None
         self._recursive_apply_frame(
             self.root, frame_pose, 0, p, r, M_parent, np.zeros(3)
         )
 
         return p, r
 
+    @property
     def all_frame_poses(self):
         p = np.empty((self.frames, len(self.joints), 3))
         r = np.empty((self.frames, len(self.joints), 3))
@@ -275,49 +299,44 @@ class Bvh:
 
         return p, r
 
-    def _plot_pose(self, p, r, fig=None, ax=None):
+    def _plot_pose(self, p, r, fig=None):
         import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import axes3d, Axes3D
 
         if fig is None:
             fig = plt.figure()
-        if ax is None:
-            ax = fig.add_subplot(111, projection="3d")
+        assert type(fig) == type(
+            plt.figure()
+        ), f"Expected matplotlib figure, got {type(fig)}"
+        ax = fig.add_subplot(111, projection="3d")
 
         ax.cla()
         ax.scatter(p[:, 0], p[:, 2], p[:, 1])
         ax.set_xlim(-30, 30)
         ax.set_ylim(-30, 30)
-        ax.set_zlim(-1, 120)
+        ax.set_zlim(-1, 120)  # type: ignore
+        return fig
 
-        plt.draw()
-        plt.pause(0.001)
-
-    def plot_frame(self, frame, fig=None, ax=None):
+    def plot_frame(self, frame: int, fig=None):
         p, r = self.frame_pose(frame)
-        self._plot_pose(p, r, fig, ax)
+        return self._plot_pose(p, r, fig)
 
+    @property
     def joint_names(self):
         return self.joints.keys()
 
-    def parse_file(self, path):
-        with open(path, "r") as f:
+    @property
+    def channels(self):
+        return [c for j in self.joints.values() for c in j.channels]
+
+    def parse_file(self, path: str | PathLike, encoding="utf-8"):
+        with open(path, "r", encoding=encoding) as f:
             self.parse_string(f.read())
-
-    def plot_all_frames(self):
-        import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import axes3d, Axes3D
-
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection="3d")
-        for i in range(self.frames):
-            self.plot_frame(i, fig, ax)
 
     def __repr__(self):
         return f"BVH {len(self.joints.keys())} joints, {self.frames} frames"
 
 
-if __name__ == "__main__":
+def main():
     # create Bvh parser
     anim = Bvh()
     # parser file
@@ -330,14 +349,15 @@ if __name__ == "__main__":
     p, r = anim.frame_pose(0)
 
     # extract all poses: axis0=frame, axis1=joint, axis2=positionXYZ/rotationXYZ
-    all_p, all_r = anim.all_frame_poses()
+    all_p, all_r = anim.all_frame_poses
 
     # print all joints, their positions and orientations
-    for _p, _r, _j in zip(p, r, anim.joint_names()):
+    for _p, _r, _j in zip(p, r, anim.joint_names):
         print(f"{_j}: p={_p}, r={_r}")
 
     # draw the skeleton for the given frame
     anim.plot_frame(22)
 
-    # show full animation
-    anim.plot_all_frames()
+
+if __name__ == "__main__":
+    main()
